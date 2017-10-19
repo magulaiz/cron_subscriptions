@@ -1,0 +1,159 @@
+#!/bin/bash
+
+function deleteuser {
+  username=$1
+  userdel -r $user >/dev/null 2>&1
+  mysql_user_exists=$(mysql -uroot -p1do9re6na5 -sse "SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user = '$username')")
+  if [ $mysql_user_exists = 1 ]; then
+    mysql -uroot -p1do9re6na5 -Bse "
+    DROP USER '$username'@'localhost';
+    FLUSH PRIVILEGES;"
+  fi
+  mysql -uroot -p1do9re6na5 -Bse "
+  DROP DATABASE IF EXISTS $username;"
+}
+
+function deleteusers {
+  users=("${!1}")
+  for username in "${users[@]}"; do
+    deleteuser $username
+  done
+}
+
+function resetuser {
+  pass=$(perl -e 'print crypt($ARGV[0], "password")' $4)
+  [ $(getent group "frmusers") ] || groupadd "frmusers"
+  if id -u "$1" >/dev/null 2>&1; then
+    if [ -d $2 ];
+    then
+      rm -r $2/*
+    else
+      mkdir -p $2
+    fi
+    cp -a /etc/skel/\. $2
+    chown -R $1:$1 $2
+    usermod -p $pass -d $2 $1 -G "frmusers"
+  else
+    useradd -m -G "frmusers" -d $2 -p $pass -s /bin/bash $1
+  fi
+}
+
+function resetdb {
+  user_exists=$(mysql -uroot -p1do9re6na5 -sse "SELECT EXISTS(SELECT 1 FROM mysql.user WHERE user = '$1')")
+  if [ $user_exists = 1 ]; then
+    mysql -uroot -p1do9re6na5 -Bse "
+    DROP USER '$1'@'localhost';
+    FLUSH PRIVILEGES;"
+  fi
+    mysql -uroot -p1do9re6na5 -Bse "
+    DROP DATABASE IF EXISTS $1;
+    CREATE DATABASE $1;
+    CREATE USER '$1'@'localhost' IDENTIFIED BY '$2';
+    GRANT ALL PRIVILEGES ON $1.* TO '$1'@'localhost';
+    FLUSH PRIVILEGES;"
+}
+
+function resetwww {
+  eval "echo \"$(cat $1)\""  > /etc/nginx/sites-available/$2.$3
+  if [ -f /etc/nginx/sites-enabled/$2.$3 ]
+  then
+    rm /etc/nginx/sites-enabled/$2.$3
+  fi
+  ln -s /etc/nginx/sites-available/$2.$3 /etc/nginx/sites-enabled/$2.$3
+}
+
+function resetdata {
+  users=("${!1}")
+  id=$2
+
+  rdm=`pwgen -s 8 1`
+
+  curl 'http://formacion.bierzo.online/views/environments/data.json' > data1.json
+  www_root=`jq -r '.[] | select(.id=="'$id'") | .www_root' data1.json`
+  www_tpl=`jq -r '.[] | select(.id=="'$id'") | .www_tpl' data1.json`
+  home_root=`jq -r '.[] | select(.id=="'$id'") | .home_root' data1.json`
+  domain=`jq -r '.[] | select(.id=="'$id'") | .domain' data1.json`
+  n_users=`jq -r '.[] | select(.id=="'$id'") | .n_users' data1.json`
+  mail_to=`jq -r '.[] | select(.id=="'$id'") | .mail_to' data1.json`
+
+  deleteusers users[@]
+
+  for i in $(seq -f "%02g" 0 $n_users)
+    do
+    username="$id""u""$i"
+    echo -ne "Reset $username ."
+    #deleteuser $username
+    if [ -z ${i} ]; then
+        echo -e "No has introducido el nombre de usuario: \n#createuserd8 <usuario>"
+    else
+      rdm=`pwgen -s 8 1`
+      home_dir=$www_root/$home_root/$username.$domain
+      resetuser $username $home_dir $id $rdm
+      echo -ne "."
+      resetdb $username $rdm
+      echo -ne "."
+      resetwww $www_tpl $username $domain
+      echo -ne "."
+      php5 smtpmail.phps "$mail_to" "$username" "$rdm" "$domain"
+      echo -ne "."
+      echo -e " Done"
+    fi
+  done
+}
+
+function resetdatauser {
+  username=$1
+  id=$2
+
+  deleteuser $username
+
+  rdm=`pwgen -s 8 1`
+
+  curl 'http://formacion.bierzo.online/views/environments/data.json' > data1.json
+  www_root=`jq -r '.[] | select(.id=="'$id'") | .www_root' data1.json`
+  www_tpl=`jq -r '.[] | select(.id=="'$id'") | .www_tpl' data1.json`
+  home_root=`jq -r '.[] | select(.id=="'$id'") | .home_root' data1.json`
+  domain=`jq -r '.[] | select(.id=="'$id'") | .domain' data1.json`
+  n_users=`jq -r '.[] | select(.id=="'$id'") | .n_users' data1.json`
+  mail_to=`jq -r '.[] | select(.id=="'$id'") | .mail_to' data1.json`
+
+  home_dir=$www_root/$home_root/$username.$domain
+  
+  resetuser $username $home_dir $id $rdm
+  echo -ne "."
+  resetdb $username $rdm
+  echo -ne "."
+  resetwww $www_tpl $username $domain
+  echo -ne "."
+  php5 smtpmail.phps "$mail_to" "$username" "$rdm" "$domain"
+  echo -ne "."
+  echo -e " Done"  
+}
+
+if [ -n "$1" ]
+then
+  username=$1
+  #printf '%s\n' "${users[@]}"
+  if groups $username | grep &>/dev/null '\bfrmusers\b'; then
+    users=($username)
+    id="${username%u*}"
+    resetdatauser $username $id
+  else
+    echo -e "El usuario $username no puede ser reinicializado"
+  fi
+else
+  PS3='Selecciona el identificador de entorno: '
+  curl 'http://formacion.bierzo.online/views/environments/data.json' > data1.json
+  ids=( $(jq -r '.[].id' data1.json) )
+  select id in "${ids[@]}"
+  do
+    if [ -n "$id" ]
+    then
+      users=( $( grep -o '^'$id'.*[:]' /etc/passwd | awk -F : '{print $1 | "sort"}' ) )
+      resetdata users[@] $id
+    fi
+    service php5-fpm restart
+    service nginx restart
+    exit
+  done
+fi

@@ -1,0 +1,59 @@
+#!/usr/bin/php
+<?php
+// This script is a skeleton of script or application using OVH APIs
+// You can launch it with the command php script.php
+// Or include it into a website be deleting the first line
+
+require __DIR__ . '/vendor/autoload.php';
+
+use \Ovh\Api;
+use GuzzleHttp\Client;
+
+////////////////////////////////////////////////////
+//     Dont forget to update your credentials     //
+////////////////////////////////////////////////////
+// Please read the documentation to get your credentials
+// https://github.com/ovh/php-ovh
+$applicationKey = "IBB1HLIAXChj7DyG";
+$applicationSecret = "pZSW0SZ4200SzR7ItDCq8xJVebDV7ADw";
+$consumer_key = "9zsLXVfbiJZkmkTDmHT5mChbahAnoD8B";
+
+// Information about API and rights asked
+$endpoint = 'ovh-eu';
+
+// Information about Zone/Domain
+$zoneName = 'bierzo.online';
+
+$fieldType = 'A';
+if (defined('STDIN')) {
+    $subDomain = $argv[1];
+} else {
+    $subDomain = $_GET['www_subdomain'];
+}
+$targetIP = '104.131.71.183';
+
+// Get API connector instance
+$ovh = new Api($applicationKey, // Application Key
+        $applicationSecret, // Application Secret
+        $endpoint, // Endpoint of API OVH Europe (List of available endpoints)
+        $consumer_key); // Consumer Key
+
+$ids = $ovh->get('/domain/zone/' . $zoneName . '/record', array(
+    'fieldType' => 'A', // Filter the value of fieldType property (like) (type: zone.NamedResolutionFieldTypeEnum)
+    'subDomain' => $subDomain, // Filter the value of subDomain property (like) (type: string)
+        ));
+
+if (isset($ids)) {
+    foreach ($ids as $id) {
+
+        $dnsDelete = $ovh->delete('/domain/zone/' . $zoneName . '/record/' . $id);
+        $ovh->post('/domain/zone/' . $zoneName . '/refresh');
+    }
+}
+$dnsRecord = $ovh->post('/domain/zone/' . $zoneName . '/record', array(
+    'fieldType' => $fieldType, // Required: Resource record Name (type: zone.NamedResolutionFieldTypeEnum)
+    'subDomain' => $subDomain, // Resource record subdomain (type: string)
+    'target' => $targetIP, // Required: Resource record target (type: string)
+        ));
+$ovh->post('/domain/zone/' . $zoneName . '/refresh');
+print_r($dnsRecord);
